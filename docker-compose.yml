@@ -1,0 +1,47 @@
+services:
+  db:
+    image: postgres:17
+    container_name: song_db
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: songlibrary
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: [ "CMD", "pg_isready", "-U", "postgres" ]
+      interval: 5s
+      retries: 5
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: song_api
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: password
+      DB_NAME: songlibrary
+    ports:
+      - "8080:8080"
+    command: ["/app/api"]
+
+
+  mockapi:
+    build:
+      context: .
+      dockerfile: Dockerfile.mockapi  # Укажи отдельный Dockerfile для mock API
+    container_name: song_mockapi
+    ports:
+      - "8081:8081"
+
+volumes:
+  pgdata:
