@@ -1,6 +1,12 @@
 basePath: /
 definitions:
   models.Song:
+    description: Модель песни
+    properties:
+      group:
+        type: string
+      song:
+        type: string
     type: object
   models.SongResponse:
     properties:
@@ -33,7 +39,32 @@ info:
 paths:
   /songs:
     get:
+      consumes:
+      - application/json
       description: Возвращает список всех песен с фильтрацией и пагинацией
+      parameters:
+      - description: Фильтр по группе
+        in: query
+        name: group
+        type: string
+      - description: Фильтр по названию песни
+        in: query
+        name: song
+        type: string
+      - description: Фильтр по дате выпуска
+        in: query
+        name: releaseDate
+        type: string
+      - default: 10
+        description: Количество песен на странице
+        in: query
+        name: limit
+        type: integer
+      - default: 0
+        description: Смещение (для пагинации)
+        in: query
+        name: offset
+        type: integer
       produces:
       - application/json
       responses:
@@ -43,6 +74,10 @@ paths:
             items:
               $ref: '#/definitions/models.SongResponse'
             type: array
+        "500":
+          description: Ошибка сервера
+          schema:
+            type: string
       summary: Получить список песен
       tags:
       - Songs

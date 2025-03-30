@@ -2,13 +2,15 @@ package models
 
 import "database/sql"
 
+// Song представляет собой структуру песни в базе данных
+// @Description Модель песни
 type Song struct {
-	ID    int            `json:"id"`
+	ID    int            `json:"id,omitempty" swaggerignore:"true"`
 	Group string         `json:"group"`
 	Title string         `json:"song"`
-	Text  sql.NullString `json:"text,omitempty"`
-	Link  sql.NullString `json:"link,omitempty"`
-	Date  sql.NullString `json:"releaseDate,omitempty"`
+	Text  sql.NullString `json:"text,omitempty" swaggerignore:"true"`
+	Link  sql.NullString `json:"link,omitempty" swaggerignore:"true"`
+	Date  sql.NullString `json:"releaseDate,omitempty" swaggerignore:"true"`
 }
 
 type SongResponse struct {

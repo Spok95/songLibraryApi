@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"github.com/gorilla/mux"
 	_ "github.com/jackc/pgx/v5/stdlib"
-	"github.com/joho/godotenv"
 	"github.com/swaggo/http-swagger"
 	"log"
 	"net/http"
@@ -29,9 +28,12 @@ import (
 	"os"
 	_ "songLibraryApi/docs"
 	"songLibraryApi/internal/models"
+	"songLibraryApi/pkg/config"
 	"strconv"
-	"strings"
 )
+
+// Глобальная переменная для БД
+var db *sql.DB
 
 // AddSongHandler добавляет новую песню
 // @Summary      Добавить песню
@@ -92,90 +94,83 @@ func addSongHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(models.ToResponse(song))
 }
 
-// GetSongsHandler возвращает список всех песен
-// @Summary      Получить список песен
-// @Description  Возвращает список всех песен с фильтрацией и пагинацией
-// @Tags         Songs
-// @Produce      json
-// @Success      200  {array}  models.SongResponse
-// @Router       /songs [get]
+// @Summary Получить список песен
+// @Description Возвращает список всех песен с фильтрацией и пагинацией
+// @Tags Songs
+// @Accept json
+// @Produce json
+// @Param group query string false "Фильтр по группе"
+// @Param song query string false "Фильтр по названию песни"
+// @Param releaseDate query string false "Фильтр по дате выпуска"
+// @Param limit query int false "Количество песен на странице" default(10)
+// @Param offset query int false "Смещение (для пагинации)" default(0)
+// @Success 200 {array} models.SongResponse
+// @Failure 500 {string} string "Ошибка сервера"
+// @Router /songs [get]
 func getSongsHandler(w http.ResponseWriter, r *http.Request) {
-	// Читаем query-параметры
+	query := `
+SELECT id, group_name, song_title, text, link, release_date
+FROM songs
+WHERE ($1::TEXT IS NULL OR group_name = $1::TEXT)
+AND ($2::TEXT IS NULL OR song_title = $2::TEXT)
+AND ($3::TEXT IS NULL OR release_date = $3::TEXT)
+LIMIT $4 OFFSET $5;`
+
+	// Читаем параметры из URL
 	group := r.URL.Query().Get("group")
 	song := r.URL.Query().Get("song")
-
-	// Пагинация
-	pageStr := r.URL.Query().Get("page")
-	limitStr := r.URL.Query().Get("limit")
+	releaseDate := r.URL.Query().Get("releaseDate")
+	limitParam := r.URL.Query().Get("limit")
+	offsetParam := r.URL.Query().Get("offset")
 
 	// Значения по умолчанию
-	page := 1
+	offset := 0
 	limit := 10
-	var err error
 
-	if pageStr != "" {
-		page, err = strconv.Atoi(pageStr)
-		if err != nil || page < 1 {
-			page = 1
+	if limitParam != "" {
+		if parsedLimit, err := strconv.Atoi(limitParam); err != nil || parsedLimit <= 0 {
+			http.Error(w, "Некорректное значение limit", http.StatusBadRequest)
+			return
+		} else {
+			limit = parsedLimit
 		}
 	}
-	if limitStr != "" {
-		limit, err = strconv.Atoi(limitStr)
-		if err != nil || limit < 1 {
-			limit = 10
+	if offsetParam != "" {
+
+		if parsedOffset, err := strconv.Atoi(offsetParam); err != nil || parsedOffset < 0 {
+			http.Error(w, "Некорректное значение offset", http.StatusBadRequest)
+			return
+		} else {
+			offset = parsedOffset
 		}
 	}
-	offset := (page - 1) * limit
 
-	// Построение SQL-запроса динамически
-	query := `SELECT id, group_name, song_title, text, link, release_date FROM songs`
-	args := []interface{}{}
-	conditions := []string{}
-
-	if group != "" {
-		conditions = append(conditions, "group_name ILIKE $"+strconv.Itoa(len(args)+1))
-		args = append(args, "%"+group+"%")
-	}
-	if song != "" {
-		conditions = append(conditions, "song_title ILIKE $"+strconv.Itoa(len(args)+1))
-		args = append(args, "%"+song+"%")
-	}
-
-	if len(conditions) > 0 {
-		query += " WHERE " + strings.Join(conditions, " AND")
-	}
-
-	query += fmt.Sprintf(" ORDER BY id DESC LIMIT $%d OFFSET $%d", len(args)+1, len(args)+2)
-	args = append(args, limit, offset)
-
-	// Выполняем запрос
-	rows, err := db.Query(query, args...)
+	rows, err := db.Query(query, sql.NullString{String: group, Valid: group != ""},
+		sql.NullString{String: song, Valid: song != ""},
+		sql.NullString{String: releaseDate, Valid: releaseDate != ""},
+		limit, offset)
 	if err != nil {
-		http.Error(w, "Database error", http.StatusInternalServerError)
-		log.Println("Query error:", err)
+		log.Printf("Ошибка запроса к БД: %v\nSQL: %s\nParams: group=%s, song=%s, releaseDate=%s, limit=%d, offset=%d",
+			err, query, group, song, releaseDate, limit, offset)
+		http.Error(w, "Ошибка сервера", http.StatusInternalServerError)
 		return
 	}
 	defer rows.Close()
 
-	var songs []models.Song
+	var songs []models.SongResponse
 	for rows.Next() {
 		var s models.Song
-		if err := rows.Scan(&s.ID, &s.Group, &s.Title, &s.Text, &s.Link, &s.Date); err != nil {
-			http.Error(w, "Row scan error", http.StatusInternalServerError)
-			log.Println("Row scan error:", err)
+		err := rows.Scan(&s.ID, &s.Group, &s.Title, &s.Text, &s.Link, &s.Date)
+		if err != nil {
+			log.Printf("Ошибка чтения результата: %v", err)
+			http.Error(w, "Ошибка сервера", http.StatusInternalServerError)
 			return
 		}
-		songs = append(songs, s)
+		songs = append(songs, models.ToResponse(s))
 	}
 
-	var response []models.SongResponse
-	for _, s := range songs {
-		response = append(response, models.ToResponse(s))
-	}
-
-	// Отправляем JSON-ответ
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	json.NewEncoder(w).Encode(songs)
 }
 
 // GetSongHandler возвращает информацию о песне по ID
@@ -237,25 +232,48 @@ func updateSongHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	idStr := vars["id"]
 
+	// Проверяем, что ID - это число
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
 		http.Error(w, "Invalid song ID", http.StatusBadRequest)
 		return
 	}
 
+	// Проверяем, существует ли песня в БД
+	var exists bool
+	err = db.QueryRow("SELECT EXISTS(SELECT 1 FROM songs WHERE id=$1)", id).Scan(&exists)
+	if err != nil {
+		log.Printf("Ошибка проверки существования песни: %v", err)
+		http.Error(w, "Ошибка сервера", http.StatusInternalServerError)
+		return
+	}
+
+	if !exists {
+		log.Printf("❌ Песня ID %d не найдена, обновление не выполнено", id)
+		http.Error(w, "Песня не найдена", http.StatusNotFound)
+		return
+	}
+
+	// Читаем тело запроса
 	var updated models.Song
 	if err := json.NewDecoder(r.Body).Decode(&updated); err != nil {
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
-	query := `UPDATE songs
-SET group_name = $1, song_title = $2
-WHERE id = $3`
 
-	_, err = db.Exec(query, updated.Group, updated.Title, id)
+	query := `UPDATE songs SET group_name = $1, song_title = $2 WHERE id = $3`
+	result, err := db.Exec(query, updated.Group, updated.Title, id)
 	if err != nil {
 		log.Printf("Update error: %v", err)
 		http.Error(w, "Failed to update song", http.StatusInternalServerError)
+		return
+	}
+
+	// Проверяем количество изменённых строк
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		log.Printf("❌ Песня ID %d не найдена, обновление не выполнено", id)
+		http.Error(w, "Песня не найдена", http.StatusNotFound)
 		return
 	}
 	log.Printf("📝 Обновлена песня ID %d", id)
@@ -272,28 +290,58 @@ WHERE id = $3`
 // @Router       /songs/{id} [delete]
 func deleteSongHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	idStr := vars["id"]
+	idStr, ok := vars["id"]
+	if !ok {
+		http.Error(w, "ID не указан", http.StatusBadRequest)
+		return
+	}
 
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
 		http.Error(w, "Invalid song ID", http.StatusBadRequest)
 		return
 	}
-	query := `DELETE FROM songs WHERE id = $1`
-	_, err = db.Exec(query, id)
+
+	// Проверяем, существует ли песня
+	var exists bool
+	err = db.QueryRow("SELECT EXISTS(SELECT 1 FROM songs WHERE id=$1)", id).Scan(&exists)
 	if err != nil {
-		log.Printf("Delete error: %v", err)
-		http.Error(w, "Failed to delete song", http.StatusInternalServerError)
+		log.Printf("Ошибка проверки существования песни: %v", err)
+		http.Error(w, "Ошибка сервера", http.StatusInternalServerError)
 		return
 	}
-	log.Printf("❌ Удалена песня ID %d", id)
+
+	if !exists {
+		log.Printf("❌ Попытка удалить несуществующую песню ID %d", id)
+		http.Error(w, "Песня не найдена", http.StatusNotFound)
+		return
+	}
+
+	// Удаление песни
+	log.Printf("🔍 Попытка удалить песню ID %d", id)
+	query := `DELETE FROM songs WHERE id = $1`
+	result, err := db.Exec(query, id)
+	if err != nil {
+		log.Printf("❌ Ошибка при удалении песни ID %d: %v", id, err)
+		http.Error(w, "Ошибка сервера", http.StatusInternalServerError)
+		return
+	}
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		log.Printf("❌ Ошибка: Песня ID %d не найдена при удалении", id)
+		http.Error(w, "Песня не найдена", http.StatusNotFound)
+		return
+	}
+	log.Printf("✅ Песня ID %d успешно удалена", id)
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// Хэндлер главной страницы
 func homeHandler(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprintf(w, "Welcome to Song Library API!")
+	fmt.Fprintf(w, "Добро пожаловать в Song Library API!")
 }
 
+// Запрос информации о песне из внешнего API
 func fetchSongInfo(group, song string) (models.SongDetail, error) {
 	// Заменить на реальный адрес API при проверке
 	mockAPIURL := os.Getenv("MOCK_API_URL")
@@ -307,52 +355,22 @@ func fetchSongInfo(group, song string) (models.SongDetail, error) {
 
 	resp, err := http.Get(reqURL)
 	if err != nil {
-		return models.SongDetail{}, fmt.Errorf("failed to fetch song info: %w", err)
+		return models.SongDetail{}, fmt.Errorf("Ошибка запроса к API: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return models.SongDetail{}, fmt.Errorf("external API returned status: %d", resp.StatusCode)
+		return models.SongDetail{}, fmt.Errorf("Внешний API вернул статус: %d", resp.StatusCode)
 	}
 
 	var detail models.SongDetail
 	if err := json.NewDecoder(resp.Body).Decode(&detail); err != nil {
-		return models.SongDetail{}, fmt.Errorf("failed to decode JSON: %w", err)
+		return models.SongDetail{}, fmt.Errorf("Ошибка парсинга JSON: %w", err)
 	}
 	return detail, nil
 }
 
-func loadEnv() {
-	if err := godotenv.Load(); err != nil {
-		log.Fatal("Ошибка загрузки .env файла")
-	}
-}
-
-var db *sql.DB
-
-func initDB() {
-	if err := godotenv.Load(); err != nil {
-		log.Fatal("Error loading .env file")
-	}
-
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		log.Fatal("DATABASE_URL not set")
-	}
-
-	var err error
-	db, err = sql.Open("pgx", dsn)
-	if err != nil {
-		log.Fatalf("Error opening DB: %v", err)
-	}
-
-	if err := db.Ping(); err != nil {
-		log.Fatalf("DB unreachable: %v", err)
-	}
-
-	log.Println("Connected to PostgreSQL!")
-}
-
+// Миграция БД
 func migrate() {
 	query := `
 CREATE TABLE IF NOT EXISTS songs (
@@ -365,15 +383,35 @@ release_date TEXT
                                  );
 `
 	if _, err := db.Exec(query); err != nil {
-		log.Fatalf("Migration failed: %v", err)
+		log.Fatalf("Ошибка миграции: %v", err)
 	}
-	log.Println("Migration complete.")
+	log.Println("✅ Миграция завершена.")
 }
 
 func main() {
-	loadEnv()
-	initDB()
+	// Загружаем конфигурацию
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		log.Fatalf("Ошибка загрузки конфигурации: %v", err)
+	}
+
+	// Подключаемся к БД
+	db, err = sql.Open("pgx", cfg.GetDatabaseURL())
+	if err != nil {
+		log.Fatalf("Ошибка подключения к БД: %v", err)
+	}
+	defer db.Close()
+
+	// Проверяем соединение
+	if err := db.Ping(); err != nil {
+		log.Fatalf("Ошибка соединения с БД: %v", err)
+	}
+	log.Printf("✅ Подключено к PostgreSQL!")
+
+	// Запускаем миграции
 	migrate()
+
+	// Настраиваем маршрутизатор
 	r := mux.NewRouter()
 	r.HandleFunc("/", homeHandler).Methods("GET")
 	r.HandleFunc("/songs", addSongHandler).Methods("POST")
@@ -383,6 +421,8 @@ func main() {
 	r.HandleFunc("/songs/{id}", deleteSongHandler).Methods("DELETE")
 	r.PathPrefix("/swagger/").Handler(httpSwagger.WrapHandler)
 
-	log.Println("Server is running on port 8080...")
-	http.ListenAndServe(":8080", r)
+	// Запуск сервера
+	port := "8080"
+	log.Println("🚀 Сервер запущен на порту %s...")
+	log.Fatal(http.ListenAndServe(":"+port, r))
 }

@@ -27,6 +27,9 @@ const docTemplate = `{
         "/songs": {
             "get": {
                 "description": "Возвращает список всех песен с фильтрацией и пагинацией",
+                "consumes": [
+                    "application/json"
+                ],
                 "produces": [
                     "application/json"
                 ],
@@ -34,6 +37,40 @@ const docTemplate = `{
                     "Songs"
                 ],
                 "summary": "Получить список песен",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Фильтр по группе",
+                        "name": "group",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Фильтр по названию песни",
+                        "name": "song",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Фильтр по дате выпуска",
+                        "name": "releaseDate",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "default": 10,
+                        "description": "Количество песен на странице",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "default": 0,
+                        "description": "Смещение (для пагинации)",
+                        "name": "offset",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -42,6 +79,12 @@ const docTemplate = `{
                             "items": {
                                 "$ref": "#/definitions/models.SongResponse"
                             }
+                        }
+                    },
+                    "500": {
+                        "description": "Ошибка сервера",
+                        "schema": {
+                            "type": "string"
                         }
                     }
                 }
@@ -201,7 +244,16 @@ const docTemplate = `{
     },
     "definitions": {
         "models.Song": {
-            "type": "object"
+            "description": "Модель песни",
+            "type": "object",
+            "properties": {
+                "group": {
+                    "type": "string"
+                },
+                "song": {
+                    "type": "string"
+                }
+            }
         },
         "models.SongResponse": {
             "type": "object",
