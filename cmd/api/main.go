@@ -30,6 +30,7 @@ import (
 	"songLibraryApi/internal/models"
 	"songLibraryApi/pkg/config"
 	"strconv"
+	"strings"
 )
 
 // Глобальная переменная для БД
@@ -336,6 +337,93 @@ func deleteSongHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// GetSongVersesHandler возвращает куплеты песни с пагинацией
+// @Summary Получить куплеты песни
+// @Description Возвращает текст песни, разбитый на куплеты (по \n\n) с пагинацией
+// @Tags Songs
+// @Produce json
+// @Param id path int true "ID песни"
+// @Param page query int false "Номер страницы (начиная с 1)" default(1)
+// @Param perPage query int false "Количество куплетов на странице" default(1)
+// @Success 200 {object} models.VerseResponse
+// @Failure 400 {string} string "Invalid request"
+// @Failure 404 {string} string "Song not found"
+// @Router /songs/{id}/verses [get]
+func getSongVersesHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	idStr := vars["id"]
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		log.Printf("❌ Некорректный ID песни: %s", idStr)
+		http.Error(w, "Invalid song ID", http.StatusBadRequest)
+		return
+	}
+
+	// Чтение параметров page и perPage
+	page := 1
+	perPage := 1
+
+	if p := r.URL.Query().Get("page"); p != "" {
+		if val, err := strconv.Atoi(p); err == nil && val > 0 {
+			page = val
+		}
+	}
+	if pp := r.URL.Query().Get("perPage"); pp != "" {
+		if val, err := strconv.Atoi(pp); err == nil && val > 0 {
+			perPage = val
+		}
+	}
+
+	log.Printf("📖 Запрос куплетов для песни ID %d (page: %d, perPage: %d)", id, page, perPage)
+
+	// Запрашиваем текст песни
+	var text sql.NullString
+	err = db.QueryRow("SELECT text FROM songs WHERE id = $1", id).Scan(&text)
+	if err == sql.ErrNoRows {
+		log.Printf("❌ Песня ID %d не найдена", id)
+		http.Error(w, "Песня не найдена", http.StatusNotFound)
+		return
+	} else if err != nil {
+		log.Printf("❌ Ошибка при получении текста песни ID %d: %v", id, err)
+		http.Error(w, "Ошибка сервера", http.StatusInternalServerError)
+		return
+	}
+
+	if !text.Valid || text.String == "" {
+		log.Printf("⚠️ Песня ID %d не содержит текста", id)
+		http.Error(w, "У песни нет текста", http.StatusNotFound)
+		return
+	}
+
+	// Разбиваем по \n\n (куплеты)
+	verses := strings.Split(text.String, "\n\n")
+	total := len(verses)
+
+	// Пагинация
+	start := (page - 1) * perPage
+	end := start + perPage
+	if start >= total {
+		log.Printf("⚠️ Страница %d выходит за пределы куплетов (всего: %d)", page, total)
+		http.Error(w, "Нет куплетов на этой странице", http.StatusNotFound)
+		return
+	}
+	if end > total {
+		end = total
+	}
+
+	response := models.VerseResponse{
+		Page:        page,
+		PerPage:     perPage,
+		TotalVerses: total,
+		Verses:      verses[start:end],
+	}
+
+	log.Printf("✅ Куплеты для песни ID %d — страница %d, отображено: %d куплета(ов) из %d", id, page, len(response.Verses), total)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
 // Хэндлер главной страницы
 func homeHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "Добро пожаловать в Song Library API!")
@@ -420,6 +508,7 @@ func main() {
 	r.HandleFunc("/songs/{id}", updateSongHandler).Methods("PUT")
 	r.HandleFunc("/songs/{id}", deleteSongHandler).Methods("DELETE")
 	r.PathPrefix("/swagger/").Handler(httpSwagger.WrapHandler)
+	r.HandleFunc("/songs/{id}/verses", getSongVersesHandler).Methods("GET")
 
 	// Запуск сервера
 	port := "8080"

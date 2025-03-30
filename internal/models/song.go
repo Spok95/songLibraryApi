@@ -39,3 +39,10 @@ func NullableToString(ns sql.NullString) string {
 	}
 	return ""
 }
+
+type VerseResponse struct {
+	Page        int      `json:"page"`
+	PerPage     int      `json:"perPage"`
+	TotalVerses int      `json:"totalVerses"`
+	Verses      []string `json:"verses"`
+}

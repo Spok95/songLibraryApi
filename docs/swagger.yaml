@@ -23,6 +23,19 @@ definitions:
       text:
         type: string
     type: object
+  models.VerseResponse:
+    properties:
+      page:
+        type: integer
+      perPage:
+        type: integer
+      totalVerses:
+        type: integer
+      verses:
+        items:
+          type: string
+        type: array
+    type: object
 host: localhost:8080
 info:
   contact:
@@ -179,6 +192,43 @@ paths:
           schema:
             type: string
       summary: Обновить песню
+      tags:
+      - Songs
+  /songs/{id}/verses:
+    get:
+      description: Возвращает текст песни, разбитый на куплеты (по \n\n) с пагинацией
+      parameters:
+      - description: ID песни
+        in: path
+        name: id
+        required: true
+        type: integer
+      - default: 1
+        description: Номер страницы (начиная с 1)
+        in: query
+        name: page
+        type: integer
+      - default: 1
+        description: Количество куплетов на странице
+        in: query
+        name: perPage
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.VerseResponse'
+        "400":
+          description: Invalid request
+          schema:
+            type: string
+        "404":
+          description: Song not found
+          schema:
+            type: string
+      summary: Получить куплеты песни
       tags:
       - Songs
 swagger: "2.0"
